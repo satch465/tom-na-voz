@@ -143,16 +143,19 @@ document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 let curF=0,cSm=null;
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
 let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, silT=0, endMarked=false, counted=false;
-/* nota entra no conjunto assim que aparece estável por ~60 ms;
+/* nota só entra quando fica firme: ±40 cents do centro por 120 ms seguidos.
+   Glissando, apojatura e escorregão da voz passam sem contar;
    conta ataques e marca fim de frase depois de 0,35 s de silêncio */
 function feed(m,dt){
   if(m==null){runM=null;runT=0;current=-1;silT+=dt;
     if(silT>=0.35&&lastStable>=0&&!endMarked){ends[lastStable]++;endMarked=true}return}
   silT=0;
   const pc=((m%12)+12)%12;current=pc;
-  if(m===runM)runT+=dt;else{runM=m;runT=dt;counted=false}
+  const dev=curF>0?Math.abs(1200*Math.log2(curF/440)-100*(m-69)):99;
+  if(m!==runM){runM=m;runT=0;counted=false}
+  runT=dev<40?runT+dt:0;
   hist[pc]+=dt;
-  if(runT>=0.06){seen.add(pc);if(!counted){att[pc]++;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
+  if(runT>=0.12){seen.add(pc);if(!counted){att[pc]++;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
 /* ---------- decisão do tom ---------- */
