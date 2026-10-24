@@ -57,6 +57,10 @@ h1 span{color:var(--accent)}
 .field .n{font-size:13px;color:var(--display-dim)}
 .field .n strong{color:var(--display-ink);font-weight:500}
 .field.empty .k{color:var(--display-dim)}
+.screen.locked .fields.one .field{background:var(--accent);border-color:var(--accent);transition:background .25s}
+.screen.locked .fields.one .field .k,.screen.locked .fields.one .field .n strong{color:var(--accent-ink)}
+.screen.locked .fields.one .field .n{color:rgba(255,246,238,.75)}
+.screen.locked .status b{color:var(--accent)}
 .scale{display:flex;gap:6px;flex-wrap:wrap;font-family:var(--f-mono);font-size:13px}
 .scale span{padding:3px 7px;border-radius:5px;background:#2A2825;color:var(--display-ink)}
 .scale span.hit{background:var(--accent);color:var(--accent-ink)}
@@ -94,7 +98,7 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
 <div class="dev">
   <header><h1>Tom na Voz<span>.</span></h1><span class="tag">só tons maiores</span></header>
 
-  <section class="screen" aria-live="polite">
+  <section class="screen" id="screen" aria-live="polite">
     <div class="status"><span><span class="led" id="led"></span><b id="stat">Pronto</b></span><span id="count">—</span></div>
     <div class="fields" id="fields"></div>
     <div class="tuner">
@@ -215,7 +219,7 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state==='suspended')ctx.resume();return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){hist.fill(0);current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');hist.fill(0);current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
   const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
@@ -223,6 +227,7 @@ function found(t){ // tom isolado e estável por 0,5 s
   return k>=0&&t-lockT>=0.5;
 }
 function done(){stopAll();render(false);const k=decide().keys[0];
+  $('screen').classList.add('locked');$('stat').textContent='Tom definido · parei de ouvir';
   $('msg').textContent=`Achei: ${PT[k]} maior. Toque no microfone para ouvir outra melodia.`}
 function runTimeline(midiAt,dur,label,onEnd){
   const t0=ctx.currentTime;let last=0;lockKey=-1;$('led').classList.add('on');
