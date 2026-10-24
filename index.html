@@ -282,7 +282,7 @@ function median(a){const s=[...a].sort((x,y)=>x-y);return s[s.length>>1]}
 
 /* ---------- motor de tempo comum ---------- */
 let ctx=null, loopId=0, stopFn=null;
-function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state==='suspended')ctx.resume();return ctx}
+function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state!=='running')ctx.resume().catch(()=>{});return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
 function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
@@ -309,16 +309,29 @@ render(false);
 
 /* ---------- microfone ---------- */
 let recording=false;
+/* o microfone é pedido uma vez e fica aberto enquanto o app está na tela;
+   entre uma escuta e outra a faixa só é pausada, sem pedir permissão de novo */
+let micStream=null,micSrc=null,an=null;
+async function getMic(){
+  const tr=micStream?.getAudioTracks()[0];
+  if(tr&&tr.readyState==='live')return micStream;
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  micSrc=null;return micStream;
+}
+function releaseMic(){if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;micSrc=null;an=null}}
+document.addEventListener('visibilitychange',()=>{if(document.hidden){if(recording){stopAll();render(false)}releaseMic()}});
 $('micBtn').onclick=async()=>{
   if(recording||stopFn){stopAll();render(false);$('msg').textContent='Parei de ouvir. Toque de novo para recomeçar.';return}
   audio();
   let stream;
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  try{stream=await getMic()}
   catch(err){$('msg').textContent='Sem acesso ao microfone. Libere em Ajustes › Safari › Microfone e tente de novo.';return}
+  try{if(ctx.state!=='running')await ctx.resume()}catch(e){}
+  stream.getAudioTracks().forEach(t=>t.enabled=true);
+  if(!micSrc){micSrc=ctx.createMediaStreamSource(stream);an=ctx.createAnalyser();an.fftSize=2048;micSrc.connect(an)}
   reset();recording=true;lockKey=-1;$('micBtn').classList.add('on');$('led').classList.add('on');
-  const srcN=ctx.createMediaStreamSource(stream),an=ctx.createAnalyser();an.fftSize=2048;srcN.connect(an);
   const buf=new Float32Array(an.fftSize),hist5=[];const t0=ctx.currentTime;let last=t0;
-  stopFn=()=>{stream.getTracks().forEach(t=>t.stop());srcN.disconnect()};
+  stopFn=()=>{stream.getAudioTracks().forEach(t=>t.enabled=false)};
   $('msg').textContent='Ouvindo… pode cantar.';
   const tick=()=>{if(!recording)return;
     an.getFloatTimeDomainData(buf);const r=yin(buf,ctx.sampleRate);
