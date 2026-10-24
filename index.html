@@ -129,6 +129,7 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
   <div class="chroma" id="chroma"></div>
   <div class="passrow"><span><i></i>nota de passagem, fora da conta</span><button type="button" id="passBtn">ligado</button></div>
   <div class="passrow"><span>Captação</span><button type="button" id="polyBtn">melodia</button></div>
+  <div class="passrow"><span>Sensibilidade</span><button type="button" id="sensBtn">média</button></div>
 
   <button class="mic" id="micBtn" type="button" aria-label="Ouvir">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -149,6 +150,9 @@ let lastTouch=0;document.addEventListener('touchend',e=>{const n=Date.now();if(n
 document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
+/* sensibilidade: confiança mínima, folga sobre o ruído e tempo firme para a nota contar */
+const SENS={baixa:{cl:.82,g:3,t:.11},media:{cl:.74,g:2.5,t:.09},alta:{cl:.66,g:2,t:.07}};
+let SEN='media';try{SEN=localStorage.getItem('tnv-sens')||'media';if(!SENS[SEN])SEN='media'}catch(e){}
 /* referência automática: desvio médio da afinação (em semitons) e trava de nota (histerese) */
 let REF=0,refS=0,refC=0,refW=0,lockN=null;
 function refLearn(raw,w,dt){const d=raw-Math.round(raw);refS+=Math.sin(2*Math.PI*d)*w*dt;refC+=Math.cos(2*Math.PI*d)*w*dt;refW+=w*dt;
@@ -169,7 +173,7 @@ function feed(m,dt,conf=1,mf=null){
   if(m!==runM){runM=m;runT=0;counted=false}
   runT=dev<50?runT+dt*conf:Math.max(0,runT-dt*.5);
   hist[pc]+=dt*conf;
-  if(runT>=0.08){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
+  if(runT>=SENS[SEN].t){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
 /* ---------- decisão do tom ---------- */
@@ -298,6 +302,9 @@ function beep(m){const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.current
   g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.5);o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+.5)}
 function passLbl(){$('passBtn').textContent=PASS?'passagem: ligado':'passagem: desligado'}passLbl();
 $('passBtn').onclick=()=>{PASS=!PASS;try{localStorage.setItem('tnv-pass',PASS?'1':'0')}catch(e){}passLbl();render(false)};
+const SENSN={baixa:'baixa',media:'média',alta:'alta'},SORD=['baixa','media','alta'];
+function sensLbl(){$('sensBtn').textContent=SENSN[SEN]}sensLbl();
+$('sensBtn').onclick=()=>{SEN=SORD[(SORD.indexOf(SEN)+1)%3];try{localStorage.setItem('tnv-sens',SEN)}catch(e){}sensLbl()};
 function polyLbl(){$('polyBtn').textContent=POLY?'polifônico (várias notas)':'melodia (uma nota)'}polyLbl();
 $('polyBtn').onclick=()=>{POLY=!POLY;try{localStorage.setItem('tnv-poly',POLY?'1':'0')}catch(e){}polyLbl();polyReset()};
 $('clearBtn').onclick=()=>{stopAll();reset();render(false);$('msg').textContent='Limpo. Toque as notas ou use o microfone.'};
@@ -435,11 +442,11 @@ $('micBtn').onclick=async()=>{
     const now=ctx.currentTime,dt=Math.min(now-last,.1);last=now;
     // ruído de fundo: só aprende com o que claramente não é nota, e devagar
     if(r.f<0||r.clarity<.45)nf=Math.min(.02,nf*.97+r.rms*.03);
-    const gate=Math.max(.001,nf*2);
-    const ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=.65;
+    const S=SENS[SEN],gate=Math.max(.0012,nf*S.g);
+    const ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=S.cl;
     let m=null,mf=null,conf=0;
     if(ok){const raw=69+12*Math.log2(r.f/440);
-      conf=Math.min(1,Math.max(.4,(r.clarity-.65)/.25));   // leitura limpa vale mais
+      conf=Math.min(1,Math.max(.4,(r.clarity-S.cl)/(.97-S.cl)));   // leitura limpa vale mais
       refLearn(raw,conf,dt);mf=raw-REF;
       // histerese: fica na nota atual até se afastar 70 cents
       m=(lockN!=null&&Math.abs(mf-lockN)<.7)?lockN:Math.round(mf);lockN=m;}
