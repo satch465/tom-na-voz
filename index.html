@@ -127,6 +127,7 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
   <div class="chroma-lbl"><span>Notas ouvidas · segure para apagar</span><button type="button" id="clearBtn">limpar</button></div>
   <div class="chroma" id="chroma"></div>
   <div class="passrow"><span><i></i>nota de passagem, fora da conta</span><button type="button" id="passBtn">ligado</button></div>
+  <div class="passrow"><span>Captação</span><button type="button" id="polyBtn">melodia</button></div>
 
   <button class="mic" id="micBtn" type="button" aria-label="Ouvir">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -147,6 +148,7 @@ let lastTouch=0;document.addEventListener('touchend',e=>{const n=Date.now();if(n
 document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
+let POLY=false;try{POLY=localStorage.getItem('tnv-poly')==='1'}catch(e){}
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
 let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, trans=new Array(144).fill(0), lastAt=new Array(12).fill(-9), firstAt=new Array(12).fill(-1), atkN=0, excluded=new Set(), silT=0, endMarked=false, counted=false;
 /* nota só entra quando fica firme: ±45 cents do centro por ~80 ms
@@ -291,7 +293,37 @@ function beep(m){const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.current
   g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.5);o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+.5)}
 function passLbl(){$('passBtn').textContent=PASS?'passagem: ligado':'passagem: desligado'}passLbl();
 $('passBtn').onclick=()=>{PASS=!PASS;try{localStorage.setItem('tnv-pass',PASS?'1':'0')}catch(e){}passLbl();render(false)};
+function polyLbl(){$('polyBtn').textContent=POLY?'polifônico (várias notas)':'melodia (uma nota)'}polyLbl();
+$('polyBtn').onclick=()=>{POLY=!POLY;try{localStorage.setItem('tnv-poly',POLY?'1':'0')}catch(e){}polyLbl();polyReset()};
 $('clearBtn').onclick=()=>{stopAll();reset();render(false);$('msg').textContent='Limpo. Toque as notas ou use o microfone.'};
+
+/* ---------- modo polifônico: várias notas ao mesmo tempo ----------
+   olha os picos do espectro (80 Hz a 2 kHz), soma a força de cada uma das 12 notas;
+   nota com pelo menos metade da força da mais forte, firme por 150 ms, conta como aparição */
+const polyRun=new Array(12).fill(0),polyOn=new Array(12).fill(false);
+function polyReset(){polyRun.fill(0);polyOn.fill(false)}
+function polyFeed(spec,sr,dt,loud){
+  const ch=new Array(12).fill(0);
+  if(loud){
+    const hz=sr/(spec.length*2),lo=Math.ceil(80/hz),hi=Math.min(spec.length-2,Math.floor(2000/hz));
+    let top=-200;for(let i=lo;i<=hi;i++)if(spec[i]>top)top=spec[i];
+    for(let i=lo;i<=hi;i++){const v=spec[i];
+      if(v<top-30||v<=spec[i-1]||v<spec[i+1])continue;       // só picos fortes
+      const a=spec[i-1],c=spec[i+1],d=a-2*v+c,off=d?(a-c)/(2*d):0;
+      const mf=69+12*Math.log2((i+off)*hz/440),mr=Math.round(mf);
+      if(Math.abs(mf-mr)>.3)continue;                        // fora do centro: não é nota
+      ch[((mr%12)+12)%12]+=10**(v/20);
+    }
+  }
+  const mx=Math.max(...ch);
+  for(let p=0;p<12;p++){
+    const on=mx>0&&ch[p]>=mx*.5;
+    polyRun[p]=on?polyRun[p]+dt:Math.max(0,polyRun[p]-dt);
+    if(on)hist[p]+=dt*ch[p]/mx;
+    if(on&&polyRun[p]>=.15&&!polyOn[p]){polyOn[p]=true;seen.add(p);att[p]++;lastAt[p]=++atkN;if(firstAt[p]<0)firstAt[p]=atkN;if(firstNote<0)firstNote=p}
+    if(polyRun[p]===0)polyOn[p]=false;
+  }
+}
 
 /* ---------- detecção de altura (YIN) ---------- */
 function yin(buf,sr){
@@ -342,14 +374,14 @@ render(false);
 let recording=false;
 /* o microfone é pedido uma vez e fica aberto enquanto o app está na tela;
    entre uma escuta e outra a faixa só é pausada, sem pedir permissão de novo */
-let micStream=null,micSrc=null,an=null;
+let micStream=null,micSrc=null,an=null,an2=null;
 async function getMic(){
   const tr=micStream?.getAudioTracks()[0];
   if(tr&&tr.readyState==='live')return micStream;
   micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:true}});
   micSrc=null;return micStream;
 }
-function releaseMic(){if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;micSrc=null;an=null}}
+function releaseMic(){if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;micSrc=null;an=null;an2=null}}
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(recording){stopAll();render(false)}releaseMic()}});
 $('micBtn').onclick=async()=>{
   if(recording||stopFn){stopAll();render(false);$('msg').textContent='Parei de ouvir. Toque de novo para recomeçar.';return}
@@ -359,9 +391,10 @@ $('micBtn').onclick=async()=>{
   catch(err){$('msg').textContent='Sem acesso ao microfone. Libere em Ajustes › Safari › Microfone e tente de novo.';return}
   try{if(ctx.state!=='running')await ctx.resume()}catch(e){}
   stream.getAudioTracks().forEach(t=>t.enabled=true);
-  if(!micSrc){micSrc=ctx.createMediaStreamSource(stream);an=ctx.createAnalyser();an.fftSize=2048;micSrc.connect(an)}
+  if(!micSrc){micSrc=ctx.createMediaStreamSource(stream);an=ctx.createAnalyser();an.fftSize=2048;micSrc.connect(an);
+    an2=ctx.createAnalyser();an2.fftSize=8192;an2.smoothingTimeConstant=.5;micSrc.connect(an2)}
   reset();recording=true;lockKey=-1;$('micBtn').classList.add('on');$('led').classList.add('on');
-  const buf=new Float32Array(an.fftSize),hist5=[];let nf=.003;const t0=ctx.currentTime;let last=t0;
+  const buf=new Float32Array(an.fftSize),spec=new Float32Array(an2.frequencyBinCount),hist5=[];let nf=.003;polyReset();const t0=ctx.currentTime;let last=t0;
   stopFn=()=>{stream.getAudioTracks().forEach(t=>t.enabled=false)};
   $('msg').textContent='Ouvindo… pode cantar.';
   const tick=()=>{if(!recording)return;
@@ -370,7 +403,10 @@ $('micBtn').onclick=async()=>{
     if(r.f<0)nf=nf*.95+r.rms*.05;            // ruído de fundo: média do que não tem altura definida
     const gate=Math.max(.0015,nf*2.5);
     const m=r.f>60&&r.f<1400&&r.rms>gate?toMidi(r.f):null;
-    curF=m==null?0:r.f;feed(m,dt);
+    curF=m==null?0:r.f;
+    if(POLY){an2.getFloatFrequencyData(spec);polyFeed(spec,ctx.sampleRate,dt,r.rms>gate);
+      if(m==null){runM=null;current=-1}else{runM=m;current=((m%12)+12)%12}}
+    else feed(m,dt);
     render(true);
     if(found(now-t0)){done();return}
     loopId=requestAnimationFrame(tick)};
