@@ -87,6 +87,10 @@ h1 span{color:var(--accent)}
   background:linear-gradient(100deg,var(--surface),var(--bg));box-shadow:inset 1px 1px 0 var(--hi),inset -1px -1px 0 var(--lo),2px 3px 6px var(--lo)}
 .chroma button.blk{background:linear-gradient(100deg,#3A3834,#24221F);color:#E8E3D8}
 .chroma button.on{background:var(--accent);color:var(--accent-ink);box-shadow:inset 1px 1px 0 rgba(255,255,255,.3),0 0 10px rgba(238,106,31,.4)}
+.chroma button.pass{background:transparent;color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.passrow{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted)}
+.passrow i{font-style:normal;display:inline-block;width:14px;height:14px;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--accent);vertical-align:-3px;margin-right:6px}
+.passrow button{all:unset;cursor:pointer;font:500 11px var(--f-mono);letter-spacing:.08em;text-transform:uppercase;text-decoration:underline;text-underline-offset:3px;color:var(--muted)}
 .chroma button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .chroma-lbl{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between}
 .chroma-lbl button{all:unset;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
@@ -122,6 +126,7 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
 
   <div class="chroma-lbl"><span>Notas ouvidas · segure para apagar</span><button type="button" id="clearBtn">limpar</button></div>
   <div class="chroma" id="chroma"></div>
+  <div class="passrow"><span><i></i>nota de passagem, fora da conta</span><button type="button" id="passBtn">ligado</button></div>
 
   <button class="mic" id="micBtn" type="button" aria-label="Ouvir">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -143,7 +148,7 @@ document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
-let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, trans=new Array(144).fill(0), silT=0, endMarked=false, counted=false;
+let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, trans=new Array(144).fill(0), lastAt=new Array(12).fill(-9), firstAt=new Array(12).fill(-1), atkN=0, excluded=new Set(), silT=0, endMarked=false, counted=false;
 /* nota só entra quando fica firme: ±40 cents do centro por 120 ms seguidos.
    Glissando, apojatura e escorregão da voz passam sem contar;
    conta ataques e marca fim de frase depois de 0,35 s de silêncio */
@@ -156,7 +161,7 @@ function feed(m,dt){
   if(m!==runM){runM=m;runT=0;counted=false}
   runT=dev<40?runT+dt:0;
   hist[pc]+=dt;
-  if(runT>=0.12){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
+  if(runT>=0.12){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
 /* ---------- decisão do tom ---------- */
@@ -193,8 +198,26 @@ function evidence(k){let e=resol(k).n;
   return e;
 }
 function significant(){return [...seen].sort((a,b)=>a-b)}
+/* módulo "notas de passagem": nota fora da escala conta enquanto é recente;
+   se ela quebrou a escala que vinha se formando, apareceu no máximo 2 vezes
+   e já vieram 2 notas depois dela, sai da conta (fica só contornada no teclado) */
+let PASS=true;try{PASS=localStorage.getItem('tnv-pass')!=='0'}catch(e){}
+const fits=set=>[...Array(12).keys()].some(k=>set.every(p=>inKey(k,p)));
+function passFilter(sig){
+  const ex=[];
+  if(PASS){
+    // a nota que "quebrou" a escala ao chegar é a suspeita
+    const order=[...sig].sort((a,b)=>firstAt[a]-firstAt[b]);let pre=[];
+    for(const p of order){
+      if(fits(pre)&&!fits([...pre,p])&&att[p]<=2&&atkN-lastAt[p]>=2){ex.push(p);continue}
+      pre.push(p);
+    }
+    sig=sig.filter(p=>!ex.includes(p));
+  }
+  excluded=new Set(ex);return sig;
+}
 function decide(){
-  const sig=significant();
+  const sig=passFilter(significant());
   if(!sig.length) return {sig,keys:[],extra:0,approx:false};
   const cover=k=>sig.filter(p=>inKey(k,p)).length;
   const best=Math.max(...[...Array(12).keys()].map(cover));
@@ -208,7 +231,7 @@ function decide(){
       const sp=spell(c[0]);conf=MAJ.map((iv,i)=>[(c[0]+iv)%12,sp[i]]).filter(x=>!inKey(c[1],x[0])).map(x=>x[1]).join(' ')}}
   return {sig,keys,extra:byContext?0:Math.max(0,c.length-2),approx,best,byContext,conf};
 }
-function outside(k){return [...seen].filter(p=>!inKey(k,p)).map(p=>PC[p]).join(' ')}
+function outside(k){return [...seen].filter(p=>!excluded.has(p)&&!inKey(k,p)).map(p=>PC[p]).join(' ')}
 function spell(k){
   const L='CDEFGAB',nat=[0,2,4,5,7,9,11];
   const li=L.indexOf(KEYS[k][0]);
@@ -220,7 +243,7 @@ function spell(k){
 function render(live){
   const r=decide(), f=$('fields');
   const inSet=new Set();r.keys.forEach(k=>MAJ.forEach(iv=>inSet.add((k+iv)%12)));
-  for(let i=0;i<12;i++){const b=$('k'+i);if(b)b.classList.toggle('on',seen.has(i))}
+  for(let i=0;i<12;i++){const b=$('k'+i);if(b){b.classList.toggle('on',seen.has(i)&&!excluded.has(i));b.classList.toggle('pass',excluded.has(i))}}
   const nn=$('nowNote'),nd=$('needle');
   if(current>=0&&curF>0){
     const c=1200*Math.log2(curF/440)-100*(runM-69);cSm=cSm==null?c:cSm*.6+c*.4;
@@ -256,10 +279,12 @@ PC.forEach((p,i)=>{const b=document.createElement('button');b.type='button';b.te
   b.addEventListener('pointerdown',()=>{held=false;hold=setTimeout(()=>{held=true;seen.delete(i);hist[i]=0;att[i]=0;ends[i]=0;if(lastStable===i)lastStable=-1;if(firstNote===i)firstNote=-1;render(false)},500)});
   ['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>clearTimeout(hold)));
   b.onclick=()=>{if(held)return;audio();$('screen').classList.remove('locked');
-    seen.add(i);hist[i]+=0.3;if(lastStable>=0&&lastStable!==i)trans[lastStable*12+i]++;att[i]++;lastStable=i;if(firstNote<0)firstNote=i;endMarked=false;beep(60+i);current=-1;render(false)};
+    seen.add(i);hist[i]+=0.3;if(lastStable>=0&&lastStable!==i)trans[lastStable*12+i]++;att[i]++;lastAt[i]=++atkN;if(firstAt[i]<0)firstAt[i]=atkN;lastStable=i;if(firstNote<0)firstNote=i;endMarked=false;beep(60+i);current=-1;render(false)};
   $('chroma').appendChild(b)});
 function beep(m){const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;o.type='triangle';o.frequency.value=440*2**((m-69)/12);
   g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.5);o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+.5)}
+function passLbl(){$('passBtn').textContent=PASS?'passagem: ligado':'passagem: desligado'}passLbl();
+$('passBtn').onclick=()=>{PASS=!PASS;try{localStorage.setItem('tnv-pass',PASS?'1':'0')}catch(e){}passLbl();render(false)};
 $('clearBtn').onclick=()=>{stopAll();reset();render(false);$('msg').textContent='Limpo. Toque as notas ou use o microfone.'};
 
 /* ---------- detecção de altura (YIN) ---------- */
@@ -285,7 +310,7 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state!=='running')ctx.resume().catch(()=>{});return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
   const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
