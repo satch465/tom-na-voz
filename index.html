@@ -62,14 +62,17 @@ h1 span{color:var(--accent)}
 .scale span.t{background:var(--accent);color:var(--accent-ink)}
 .more{font-family:var(--f-mono);font-size:11px;color:var(--display-dim);letter-spacing:.06em}
 
-.meter{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;align-items:end}
-.col{display:flex;flex-direction:column;align-items:center;gap:5px}
-.bar{width:100%;height:46px;background:#262421;border-radius:3px;position:relative;overflow:hidden}
-.bar{transition:background .15s,box-shadow .15s}
-.col.sig .bar{background:var(--accent);box-shadow:0 0 10px rgba(238,106,31,.45)}
-.col.now .bar{box-shadow:0 0 0 1px var(--display-ink)}
-.col label{font-family:var(--f-mono);font-size:10px;color:var(--display-dim)}
-.col.sig label{color:var(--display-ink)}
+.tuner{display:grid;grid-template-columns:64px 1fr;gap:12px;align-items:center;border-top:1px solid #33312D;padding-top:12px}
+.now-note{font-family:var(--f-mono);font-size:28px;font-weight:500;text-align:center;line-height:1}
+.now-note.ok{color:var(--accent)}
+.dial{position:relative;height:38px}
+.ticks{position:absolute;inset:0 0 14px;display:flex;justify-content:space-between;align-items:flex-end}
+.ticks i{width:1px;height:8px;background:var(--display-dim)}
+.ticks i.mid{height:16px;background:var(--display-ink)}
+.needle{position:absolute;bottom:14px;width:2px;height:24px;margin-left:-1px;background:var(--display-ink);border-radius:1px;left:50%;transition:left .08s linear;opacity:.25}
+.needle.on{opacity:1}.needle.ok{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.dial-lbl{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:10px;color:var(--display-dim)}
+.cents{color:var(--display-ink)}
 
 .note{font-size:13px;color:var(--muted);line-height:1.45;margin:0;text-align:center;min-height:2.9em;text-wrap:balance}
 .mic{width:112px;height:112px;border-radius:50%;border:0;cursor:pointer;margin:6px auto 0;display:grid;place-items:center;color:var(--accent-ink);
@@ -82,7 +85,7 @@ h1 span{color:var(--accent)}
 @keyframes pulse{50%{box-shadow:inset 2px 2px 0 rgba(255,255,255,.08),4px 6px 14px var(--lo),0 0 0 9px var(--surface),0 0 0 14px var(--accent)}}
 .alt{position:relative;align-self:center;font-size:12px;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
-@media (prefers-reduced-motion:reduce){.bar{transition:none}.mic.on{animation:none}}
+@media (prefers-reduced-motion:reduce){.needle{transition:none}.mic.on{animation:none}}
 </style>
 
 </head>
@@ -93,7 +96,12 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
   <section class="screen" aria-live="polite">
     <div class="status"><span><span class="led" id="led"></span><b id="stat">Pronto</b></span><span id="count">—</span></div>
     <div class="fields" id="fields"></div>
-    <div class="meter" id="meter"></div>
+    <div class="tuner">
+      <div class="now-note" id="nowNote">–</div>
+      <div class="dial"><div class="ticks"><i></i><i></i><i></i><i></i><i class="mid"></i><i></i><i></i><i></i><i></i></div>
+        <div class="needle" id="needle"></div>
+        <div class="dial-lbl"><span>♭ −50</span><span class="cents" id="cents">&nbsp;</span><span>+50 ♯</span></div></div>
+    </div>
   </section>
 
   <button class="mic" id="micBtn" type="button" aria-label="Ouvir">
@@ -114,6 +122,7 @@ document.addEventListener('touchmove',e=>{if(e.touches.length>1)e.preventDefault
 let lastTouch=0;document.addEventListener('touchend',e=>{const n=Date.now();if(n-lastTouch<320)e.preventDefault();lastTouch=n},{passive:false});
 document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
+let curF=0,cSm=null;
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
 /* nota entra no conjunto assim que aparece estável por ~60 ms */
 function feed(m,dt){
@@ -152,14 +161,17 @@ function spell(k){
 }
 
 /* ---------- desenho ---------- */
-const meter=$('meter');
-PC.forEach((p,i)=>{meter.insertAdjacentHTML('beforeend',`<div class="col" id="c${i}"><div class="bar"></div><label>${p}</label></div>`)});
 function render(live){
   const r=decide(), f=$('fields');
   const inSet=new Set();r.keys.forEach(k=>MAJ.forEach(iv=>inSet.add((k+iv)%12)));
-  for(let i=0;i<12;i++){const c=$('c'+i);
-    c.classList.toggle('sig',r.sig.includes(i));
-    c.classList.toggle('now',i===current);}
+  const nn=$('nowNote'),nd=$('needle');
+  if(current>=0&&curF>0){
+    const c=1200*Math.log2(curF/440)-100*(runM-69);cSm=cSm==null?c:cSm*.6+c*.4;
+    const ok=Math.abs(cSm)<8;
+    nn.textContent=PC[current];nn.classList.toggle('ok',ok);
+    nd.style.left=(50+Math.max(-50,Math.min(50,cSm)))+'%';nd.className='needle on'+(ok?' ok':'');
+    $('cents').textContent=(cSm>0?'+':'')+Math.round(cSm);
+  }else{nn.textContent='–';nn.classList.remove('ok');nd.className='needle';cSm=null;$('cents').innerHTML='&nbsp;'}
   $('count').textContent=r.sig.length?`${r.sig.length} nota${r.sig.length>1?'s':''}`:'—';
   if(!r.keys.length){
     f.className='fields';f.innerHTML=`<div class="field empty"><div class="k">–</div><div class="n">ouvindo…</div></div><div class="field empty"><div class="k">–</div><div class="n">&nbsp;</div></div>`;
@@ -240,7 +252,7 @@ $('micBtn').onclick=async()=>{
     an.getFloatTimeDomainData(buf);const r=yin(buf,ctx.sampleRate);
     const now=ctx.currentTime,dt=Math.min(now-last,.1);last=now;
     const m=r.f>60&&r.f<1100&&r.rms>.01?toMidi(r.f):null;
-    feed(m,dt);
+    curF=m==null?0:r.f;feed(m,dt);
     render(true);
     if(found(now-t0)){done();return}
     loopId=requestAnimationFrame(tick)};
