@@ -297,7 +297,7 @@ function yin(buf,sr){
   let run=0;const c=new Float32Array(tMax+1);c[0]=1;
   for(let t=1;t<=tMax;t++){run+=d[t];c[t]=run?d[t]*t/run:1}
   let tau=-1;
-  for(let t=tMin;t<=tMax;t++){if(c[t]<0.15){while(t+1<=tMax&&c[t+1]<c[t])t++;tau=t;break}}
+  for(let t=tMin;t<=tMax;t++){if(c[t]<0.18){while(t+1<=tMax&&c[t+1]<c[t])t++;tau=t;break}}
   if(tau<0) return {f:-1,rms};
   const a=c[tau-1]??c[tau],b=c[tau],e=c[tau+1]??c[tau],den=a+e-2*b;
   const tt=den?tau+(a-e)/(2*den):tau;
@@ -341,7 +341,7 @@ let micStream=null,micSrc=null,an=null;
 async function getMic(){
   const tr=micStream?.getAudioTracks()[0];
   if(tr&&tr.readyState==='live')return micStream;
-  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:true}});
   micSrc=null;return micStream;
 }
 function releaseMic(){if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null;micSrc=null;an=null}}
@@ -356,13 +356,15 @@ $('micBtn').onclick=async()=>{
   stream.getAudioTracks().forEach(t=>t.enabled=true);
   if(!micSrc){micSrc=ctx.createMediaStreamSource(stream);an=ctx.createAnalyser();an.fftSize=2048;micSrc.connect(an)}
   reset();recording=true;lockKey=-1;$('micBtn').classList.add('on');$('led').classList.add('on');
-  const buf=new Float32Array(an.fftSize),hist5=[];const t0=ctx.currentTime;let last=t0;
+  const buf=new Float32Array(an.fftSize),hist5=[];let nf=.003;const t0=ctx.currentTime;let last=t0;
   stopFn=()=>{stream.getAudioTracks().forEach(t=>t.enabled=false)};
   $('msg').textContent='Ouvindo… pode cantar.';
   const tick=()=>{if(!recording)return;
     an.getFloatTimeDomainData(buf);const r=yin(buf,ctx.sampleRate);
     const now=ctx.currentTime,dt=Math.min(now-last,.1);last=now;
-    const m=r.f>60&&r.f<1100&&r.rms>.01?toMidi(r.f):null;
+    if(r.f<0)nf=nf*.95+r.rms*.05;            // ruído de fundo: média do que não tem altura definida
+    const gate=Math.max(.0015,nf*2.5);
+    const m=r.f>60&&r.f<1400&&r.rms>gate?toMidi(r.f):null;
     curF=m==null?0:r.f;feed(m,dt);
     render(true);
     if(found(now-t0)){done();return}
