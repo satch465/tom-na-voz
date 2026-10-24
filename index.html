@@ -261,7 +261,9 @@ function decide(){
     const gap=score(c[0])-score(c[1]);
     if(gap>=.6&&evidence(c[0])>=2){byContext=true;keys=[c[0]];
       const sp=spell(c[0]);conf=MAJ.map((iv,i)=>[(c[0]+iv)%12,sp[i]]).filter(x=>!inKey(c[1],x[0])).map(x=>x[1]).join(' ')}}
-  return {sig,keys,extra:byContext?0:Math.max(0,c.length-2),approx,best,byContext,conf};
+  // sem ambiguidade na tela: fica sempre o mais provável; o segundo só vai para o registro
+  const alt=keys.length>1?keys[1]:null;keys=keys.slice(0,1);
+  return {sig,keys,extra:0,approx,best,byContext,conf,alt};
 }
 function outside(k){return [...seen].filter(p=>!excluded.has(p)&&!inKey(k,p)).map(p=>PC[p]).join(' ')}
 function spell(k){
@@ -297,7 +299,7 @@ function render0(live){
     f.className='fields one';
     f.innerHTML=`<div class="field"><div class="k">${KEYS[k]}</div><div class="n"><strong>${PT[k]} maior</strong>${r.approx?' · '+outside(k)+' fora da escala':''}${r.byContext?' · pelo contexto<br><span class="fv">'+r.conf+' confirmaria</span>':''}</div></div>
       <div class="scale">${spell(k).map((s,i)=>`<span class="${seen.has((k+MAJ[i])%12)?'hit':''}${i?'':' t'}">${s}</span>`).join('')}</div>`;
-    $('stat').textContent=r.approx?'Mais provável':r.byContext?'Definido pelo contexto':'Tom definido';
+    $('stat').textContent=r.sig.length<4?'Palpite':r.byContext?'Definido pelo contexto':'Tom';
   }else{
     f.className='fields';
     f.innerHTML=r.keys.map((k,j)=>`<div class="field${j?'':' fav'}"><div class="k">${KEYS[k]}</div><div class="n"><strong>${PT[k]} maior</strong>${j?'':'<br><span class="fv">mais provável</span>'}${r.approx?'<br>'+outside(k)+' fora':''}</div></div>`).join('')
@@ -357,7 +359,7 @@ function polyFeed(spec,sr,dt,loud){
 
 /* ---------- modo estudo: marca o tom encontrado, continua ouvindo e registra acerto/erro ---------- */
 let STUDY=true;try{STUDY=localStorage.getItem('tnv-study')!=='0'}catch(e){}
-let studyFound=-1,studyCtx=false,LOG=[];
+let studyFound=-1,studyCtx=false,studyAlt=null,LOG=[];
 try{LOG=JSON.parse(localStorage.getItem('tnv-log')||'[]')}catch(e){LOG=[]}
 function saveLog(){try{localStorage.setItem('tnv-log',JSON.stringify(LOG.slice(-200)))}catch(e){}studyLbl()}
 function studyLbl(){const ok=LOG.filter(x=>x.certo).length;
@@ -366,13 +368,13 @@ function studyLbl(){const ok=LOG.filter(x=>x.certo).length;
 function studyHit(){
   const r=decide();if(r.keys.length!==1)return;
   if(studyFound===r.keys[0])return;
-  studyFound=r.keys[0];studyCtx=!!r.byContext;
+  studyFound=r.keys[0];studyCtx=!!r.byContext;studyAlt=r.alt;
   $('screen').classList.add('locked');
   $('fbQ').textContent=`Encontrei ${PT[studyFound]} maior. Acertou?`;
   $('fbPick').hidden=true;$('fb').hidden=false;
 }
 function snap(){const r=decide();
-  return {quando:new Date().toISOString(),achou:KEYS[studyFound],contexto:studyCtx,agora:r.keys.map(k=>KEYS[k]).join('/'),
+  return {quando:new Date().toISOString(),achou:KEYS[studyFound],contexto:studyCtx,duvida:studyAlt!=null?KEYS[studyAlt]:'-',agora:r.keys.map(k=>KEYS[k]).join('/'),
     notas:[...seen].sort((a,b)=>a-b).map(p=>PC[p]+'×'+att[p]+(excluded.has(p)?'(pass)':'')).join(' '),
     primeira:firstNote>=0?PC[firstNote]:'-',ultima:lastStable>=0?PC[lastStable]:'-',
     fins:ends.map((v,p)=>v?PC[p]+'×'+v:'').filter(Boolean).join(' ')||'-',
@@ -384,7 +386,7 @@ KEYS.forEach((k,i)=>{const b=document.createElement('button');b.type='button';b.
 $('fbYes').onclick=()=>logAnswer(true,KEYS[studyFound]);
 $('fbNo').onclick=()=>{$('fbQ').textContent='Qual era o tom certo?';$('fbPick').hidden=false};
 $('studyBtn').onclick=()=>{STUDY=!STUDY;try{localStorage.setItem('tnv-study',STUDY?'1':'0')}catch(e){}studyLbl()};
-function logText(){return LOG.map((x,i)=>`#${i+1} ${x.certo?'ACERTOU':'ERROU'} · achou ${x.achou}${x.contexto?' (contexto)':''}${x.certo?'':' · certo: '+(x.correto||'?')} · agora ${x.agora} · notas ${x.notas} · 1ª ${x.primeira} · última ${x.ultima} · fins ${x.fins} · A${x.A} · ${x.modo}/${x.sens}`).join('\n')}
+function logText(){return LOG.map((x,i)=>`#${i+1} ${x.certo?'ACERTOU':'ERROU'} · achou ${x.achou}${x.contexto?' (contexto)':''}${x.duvida&&x.duvida!=='-'?' · 2º '+x.duvida:''}${x.certo?'':' · certo: '+(x.correto||'?')} · agora ${x.agora} · notas ${x.notas} · 1ª ${x.primeira} · última ${x.ultima} · fins ${x.fins} · A${x.A} · ${x.modo}/${x.sens}`).join('\n')}
 $('copyBtn').onclick=()=>{const t=logText()||'(sem registros)';const a=$('copyArea');
   const show=()=>{a.value=t;a.hidden=false;a.focus();a.select()};
   try{navigator.clipboard.writeText(t).then(()=>{$('msg').textContent='Registro copiado. Cole aqui na conversa.';a.hidden=true},show)}catch(e){show()}};
@@ -442,7 +444,7 @@ function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}
 function reset(){$('screen').classList.remove('locked');studyFound=-1;studyCtx=false;$('fb').hidden=true;REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
-  const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
+  const r=decide();const k=r.keys.length===1&&r.sig.length>=4?r.keys[0]:-1;
   if(k!==lockKey){lockKey=k;lockT=t;return false}
   return k>=0&&t-lockT>=0.5;
 }
