@@ -142,7 +142,7 @@ document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
-let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, silT=0, endMarked=false, counted=false;
+let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, silT=0, endMarked=false, counted=false;
 /* nota entra no conjunto assim que aparece estável por ~60 ms;
    conta ataques e marca fim de frase depois de 0,35 s de silêncio */
 function feed(m,dt){
@@ -152,7 +152,7 @@ function feed(m,dt){
   const pc=((m%12)+12)%12;current=pc;
   if(m===runM)runT+=dt;else{runM=m;runT=dt;counted=false}
   hist[pc]+=dt;
-  if(runT>=0.06){seen.add(pc);if(!counted){att[pc]++;counted=true;lastStable=pc;endMarked=false}}
+  if(runT>=0.06){seen.add(pc);if(!counted){att[pc]++;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
 /* ---------- decisão do tom ---------- */
@@ -164,14 +164,15 @@ function corr(k){
   return dx&&dy?n/Math.sqrt(dx*dy):0;
 }
 /* peso por grau: tônica, quinta e terça puxam; a sensível no fim pede resolução */
-const DW={0:1,7:.7,4:.6,11:.1}, EW={0:1,4:.7,7:.6,11:-.8};
+const DW={0:1,7:.7,4:.6,11:.1}, EW={0:1,4:.7,7:.6,11:-.8}, FW={0:1,7:.6,4:.4};
 function score(k){
   let a=0,at=0,e=0,et=0;
   for(let p=0;p<12;p++){const d=(p-k+12)%12;
     if(att[p]){a+=att[p]*(DW[d]??.3);at+=att[p]}
     if(ends[p]){e+=ends[p]*(EW[d]??0);et+=ends[p]}}
   if(lastStable>=0){e+=EW[(lastStable-k+12)%12]??0;et+=1}
-  return corr(k)+.5*(at?a/at:0)+.8*(et?e/et:0);
+  const fw=firstNote>=0?(FW[(firstNote-k+12)%12]??0):0;
+  return corr(k)+.5*(at?a/at:0)+.8*(et?e/et:0)+.4*fw;
 }
 function significant(){return [...seen].sort((a,b)=>a-b)}
 function decide(){
@@ -229,10 +230,10 @@ const BLK=[1,3,6,8,10];
 PC.forEach((p,i)=>{const b=document.createElement('button');b.type='button';b.textContent=p;b.id='k'+i;
   if(BLK.includes(i))b.className='blk';
   let hold=0,held=false;
-  b.addEventListener('pointerdown',()=>{held=false;hold=setTimeout(()=>{held=true;seen.delete(i);hist[i]=0;att[i]=0;ends[i]=0;if(lastStable===i)lastStable=-1;render(false)},500)});
+  b.addEventListener('pointerdown',()=>{held=false;hold=setTimeout(()=>{held=true;seen.delete(i);hist[i]=0;att[i]=0;ends[i]=0;if(lastStable===i)lastStable=-1;if(firstNote===i)firstNote=-1;render(false)},500)});
   ['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>clearTimeout(hold)));
   b.onclick=()=>{if(held)return;audio();$('screen').classList.remove('locked');
-    seen.add(i);hist[i]+=0.3;att[i]++;lastStable=i;endMarked=false;beep(60+i);current=-1;render(false)};
+    seen.add(i);hist[i]+=0.3;att[i]++;lastStable=i;if(firstNote<0)firstNote=i;endMarked=false;beep(60+i);current=-1;render(false)};
   $('chroma').appendChild(b)});
 function beep(m){const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;o.type='triangle';o.frequency.value=440*2**((m-69)/12);
   g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.5);o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+.5)}
@@ -261,7 +262,7 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state==='suspended')ctx.resume();return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);lastStable=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
   const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
