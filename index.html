@@ -433,12 +433,13 @@ $('micBtn').onclick=async()=>{
   const tick=()=>{if(!recording)return;
     an.getFloatTimeDomainData(buf);const r=mpm(buf,ctx.sampleRate);
     const now=ctx.currentTime,dt=Math.min(now-last,.1);last=now;
-    if(r.f<0||r.clarity<.8)nf=nf*.95+r.rms*.05;   // ruído de fundo: média do que não tem altura definida
-    const gate=Math.max(.0015,nf*2.5);
-    const ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=.8;
+    // ruído de fundo: só aprende com o que claramente não é nota, e devagar
+    if(r.f<0||r.clarity<.45)nf=Math.min(.02,nf*.97+r.rms*.03);
+    const gate=Math.max(.001,nf*2);
+    const ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=.65;
     let m=null,mf=null,conf=0;
     if(ok){const raw=69+12*Math.log2(r.f/440);
-      conf=Math.min(1,Math.max(.3,(r.clarity-.8)/.15));   // leitura limpa vale mais
+      conf=Math.min(1,Math.max(.4,(r.clarity-.65)/.25));   // leitura limpa vale mais
       refLearn(raw,conf,dt);mf=raw-REF;
       // histerese: fica na nota atual até se afastar 70 cents
       m=(lockN!=null&&Math.abs(mf-lockN)<.7)?lockN:Math.round(mf);lockN=m;}
