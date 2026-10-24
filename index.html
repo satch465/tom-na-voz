@@ -151,7 +151,7 @@ document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
 /* sensibilidade: confiança mínima, folga sobre o ruído e tempo firme para a nota contar */
-const SENS={baixa:{cl:.82,g:3,t:.11},media:{cl:.74,g:2.5,t:.09},alta:{cl:.66,g:2,t:.07}};
+const SENS={baixa:{cl:.82,g:3,t:.08},media:{cl:.74,g:2.5,t:.055},alta:{cl:.66,g:2,t:.04}};
 let SEN='media';try{SEN=localStorage.getItem('tnv-sens')||'media';if(!SENS[SEN])SEN='media'}catch(e){}
 /* referência automática: desvio médio da afinação (em semitons) e trava de nota (histerese) */
 let REF=0,refS=0,refC=0,refW=0,lockN=null;
@@ -171,7 +171,7 @@ function feed(m,dt,conf=1,mf=null){
   const pc=((m%12)+12)%12;current=pc;
   const dev=mf!=null?Math.abs(mf-m)*100:(curF>0?Math.abs(1200*Math.log2(curF/440)-100*(m-69)):99);
   if(m!==runM){runM=m;runT=0;counted=false}
-  runT=dev<50?runT+dt*conf:Math.max(0,runT-dt*.5);
+  runT=dev<50?runT+dt:Math.max(0,runT-dt*.5);
   hist[pc]+=dt*conf;
   if(runT>=SENS[SEN].t){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
