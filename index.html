@@ -83,6 +83,13 @@ h1 span{color:var(--accent)}
 .dial-lbl{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:10px;color:var(--display-dim)}
 .cents{color:var(--display-ink)}
 
+.fb{display:flex;flex-direction:column;gap:10px;align-items:center;font-size:14px}
+.fb-btns{display:flex;gap:10px}
+.fb-btns .pill{min-width:120px}
+.fb-pick{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;width:100%}
+.fb-pick button{font:500 13px var(--f-mono);color:var(--ink);border:0;border-radius:8px;padding:9px 0;cursor:pointer;background:var(--surface);box-shadow:inset 0 0 0 1px var(--line)}
+.fb-pick button.wide{grid-column:span 6;font-family:var(--f-ui)}
+#copyArea{width:100%;box-sizing:border-box;height:120px;font:12px var(--f-mono);background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px}
 .chroma{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
 .chroma button{font:500 14px var(--f-mono);color:var(--ink);border:0;border-radius:10px;padding:12px 0;cursor:pointer;
   background:linear-gradient(100deg,var(--surface),var(--bg));box-shadow:inset 1px 1px 0 var(--hi),inset -1px -1px 0 var(--lo),2px 3px 6px var(--lo)}
@@ -125,11 +132,19 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
     </div>
   </section>
 
+  <div class="fb" id="fb" hidden>
+    <span id="fbQ">Acertou o tom?</span>
+    <div class="fb-btns"><button type="button" class="pill go small" id="fbYes">Acertou</button><button type="button" class="pill small" id="fbNo">Errou</button></div>
+    <div class="fb-pick" id="fbPick" hidden></div>
+  </div>
+
   <div class="chroma-lbl"><span>Notas ouvidas · segure para apagar</span><button type="button" id="clearBtn">limpar</button></div>
   <div class="chroma" id="chroma"></div>
   <div class="passrow"><span><i></i>nota de passagem, fora da conta</span><button type="button" id="passBtn">ligado</button></div>
   <div class="passrow"><span>Captação</span><button type="button" id="polyBtn">melodia</button></div>
   <div class="passrow"><span>Sensibilidade</span><button type="button" id="sensBtn">média</button></div>
+  <div class="passrow"><span id="studyInfo">Estudo</span><span><button type="button" id="studyBtn">ligado</button> · <button type="button" id="copyBtn">copiar</button> · <button type="button" id="wipeBtn">apagar</button></span></div>
+  <textarea id="copyArea" hidden readonly></textarea>
 
   <button class="mic" id="micBtn" type="button" aria-label="Ouvir">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -257,7 +272,10 @@ function spell(k){
 }
 
 /* ---------- desenho ---------- */
-function render(live){
+function render(live){render0(live);
+  if(live&&STUDY&&studyFound>=0)$('stat').textContent='Encontrado: '+KEYS[studyFound]+' · ainda ouvindo';
+}
+function render0(live){
   const r=decide(), f=$('fields');
   const inSet=new Set();r.keys.forEach(k=>MAJ.forEach(iv=>inSet.add((k+iv)%12)));
   for(let i=0;i<12;i++){const b=$('k'+i);if(b){b.classList.toggle('on',seen.has(i)&&!excluded.has(i));b.classList.toggle('pass',excluded.has(i))}}
@@ -337,6 +355,44 @@ function polyFeed(spec,sr,dt,loud){
   }
 }
 
+/* ---------- modo estudo: marca o tom encontrado, continua ouvindo e registra acerto/erro ---------- */
+let STUDY=true;try{STUDY=localStorage.getItem('tnv-study')!=='0'}catch(e){}
+let studyFound=-1,studyCtx=false,LOG=[];
+try{LOG=JSON.parse(localStorage.getItem('tnv-log')||'[]')}catch(e){LOG=[]}
+function saveLog(){try{localStorage.setItem('tnv-log',JSON.stringify(LOG.slice(-200)))}catch(e){}studyLbl()}
+function studyLbl(){const ok=LOG.filter(x=>x.certo).length;
+  $('studyInfo').textContent=LOG.length?`Estudo · ${LOG.length} registro${LOG.length>1?'s':''} · ${ok} acerto${ok===1?'':'s'}`:'Estudo';
+  $('studyBtn').textContent=STUDY?'ligado':'desligado'}
+function studyHit(){
+  const r=decide();if(r.keys.length!==1)return;
+  if(studyFound===r.keys[0])return;
+  studyFound=r.keys[0];studyCtx=!!r.byContext;
+  $('screen').classList.add('locked');
+  $('fbQ').textContent=`Encontrei ${PT[studyFound]} maior. Acertou?`;
+  $('fbPick').hidden=true;$('fb').hidden=false;
+}
+function snap(){const r=decide();
+  return {quando:new Date().toISOString(),achou:KEYS[studyFound],contexto:studyCtx,agora:r.keys.map(k=>KEYS[k]).join('/'),
+    notas:[...seen].sort((a,b)=>a-b).map(p=>PC[p]+'×'+att[p]+(excluded.has(p)?'(pass)':'')).join(' '),
+    primeira:firstNote>=0?PC[firstNote]:'-',ultima:lastStable>=0?PC[lastStable]:'-',
+    fins:ends.map((v,p)=>v?PC[p]+'×'+v:'').filter(Boolean).join(' ')||'-',
+    A:Math.round(440*2**(REF/12)),modo:POLY?'poli':'mel',sens:SEN}}
+function logAnswer(certo,correto){LOG.push({...snap(),certo,correto});saveLog();
+  $('fb').hidden=true;$('msg').textContent=certo?'Registrado: acertou. Continuo ouvindo.':`Registrado: errou${correto?' (era '+correto+')':''}. Continuo ouvindo.`}
+KEYS.forEach((k,i)=>{const b=document.createElement('button');b.type='button';b.textContent=k;b.onclick=()=>logAnswer(false,k);$('fbPick').appendChild(b)});
+(()=>{const b=document.createElement('button');b.type='button';b.className='wide';b.textContent='não sei qual é';b.onclick=()=>logAnswer(false,null);$('fbPick').appendChild(b)})();
+$('fbYes').onclick=()=>logAnswer(true,KEYS[studyFound]);
+$('fbNo').onclick=()=>{$('fbQ').textContent='Qual era o tom certo?';$('fbPick').hidden=false};
+$('studyBtn').onclick=()=>{STUDY=!STUDY;try{localStorage.setItem('tnv-study',STUDY?'1':'0')}catch(e){}studyLbl()};
+function logText(){return LOG.map((x,i)=>`#${i+1} ${x.certo?'ACERTOU':'ERROU'} · achou ${x.achou}${x.contexto?' (contexto)':''}${x.certo?'':' · certo: '+(x.correto||'?')} · agora ${x.agora} · notas ${x.notas} · 1ª ${x.primeira} · última ${x.ultima} · fins ${x.fins} · A${x.A} · ${x.modo}/${x.sens}`).join('\n')}
+$('copyBtn').onclick=()=>{const t=logText()||'(sem registros)';const a=$('copyArea');
+  const show=()=>{a.value=t;a.hidden=false;a.focus();a.select()};
+  try{navigator.clipboard.writeText(t).then(()=>{$('msg').textContent='Registro copiado. Cole aqui na conversa.';a.hidden=true},show)}catch(e){show()}};
+let wipeArm=0;$('wipeBtn').onclick=()=>{
+  if(Date.now()-wipeArm<3000){LOG=[];saveLog();$('wipeBtn').textContent='apagar';$('msg').textContent='Registro apagado.';wipeArm=0;return}
+  wipeArm=Date.now();$('wipeBtn').textContent='toque de novo';setTimeout(()=>{$('wipeBtn').textContent='apagar'},3000)};
+studyLbl();
+
 /* ---------- detecção de altura (MPM, McLeod) ----------
    função de diferença normalizada; escolhe o primeiro pico com 90% do maior.
    "clarity" (0–1) diz o quanto a leitura é confiável */
@@ -383,7 +439,7 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state!=='running')ctx.resume().catch(()=>{});return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){$('screen').classList.remove('locked');REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');studyFound=-1;studyCtx=false;$('fb').hidden=true;REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
   const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
@@ -398,7 +454,7 @@ function runTimeline(midiAt,dur,label,onEnd){
   const tick=()=>{const t=ctx.currentTime-t0;const dt=Math.min(t-last,.1);last=t;
     if(dt>0)feed(midiAt(t),dt);
     render(true);
-    if(found(t)){done();return}
+    if(found(t)){if(STUDY)studyHit();else{done();return}}
     if(t<dur)loopId=requestAnimationFrame(tick);else{stopAll();render(false);onEnd&&onEnd()}};
   $('stat').textContent=label;loopId=requestAnimationFrame(tick);
 }
@@ -456,7 +512,7 @@ $('micBtn').onclick=async()=>{
       if(m==null){runM=null;current=-1}else{runM=m;current=((m%12)+12)%12}}
     else feed(m,dt,conf,mf);
     render(true);
-    if(found(now-t0)){done();return}
+    if(found(now-t0)){if(STUDY)studyHit();else{done();return}}
     loopId=requestAnimationFrame(tick)};
   loopId=requestAnimationFrame(tick);
 };
