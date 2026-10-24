@@ -156,10 +156,9 @@ const meter=$('meter');
 PC.forEach((p,i)=>{meter.insertAdjacentHTML('beforeend',`<div class="col" id="c${i}"><div class="bar"><i></i></div><label>${p}</label></div>`)});
 function render(live){
   const r=decide(), f=$('fields');
-  const max=Math.max(...hist,0.001);
   const inSet=new Set();r.keys.forEach(k=>MAJ.forEach(iv=>inSet.add((k+iv)%12)));
   for(let i=0;i<12;i++){const c=$('c'+i);
-    c.querySelector('i').style.height=(hist[i]/max*100)+'%';
+    c.querySelector('i').style.height=(seen.has(i)?100:0)+'%';
     c.classList.toggle('sig',r.sig.includes(i));
     c.classList.toggle('in',r.keys.length===1&&r.sig.includes(i));
     c.classList.toggle('now',i===current);}
