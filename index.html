@@ -200,20 +200,25 @@ function evidence(k){let e=resol(k).n;
 }
 function significant(){return [...seen].sort((a,b)=>a-b)}
 /* módulo "notas de passagem": nota fora da escala conta enquanto é recente;
-   se ela quebrou a escala que vinha se formando, apareceu no máximo 2 vezes
-   e já vieram 2 notas depois dela, sai da conta (fica só contornada no teclado) */
+   se ela está fora da escala que a maioria aponta, apareceu no máximo 2 vezes
+   e já vieram 2 notas depois dela, sai da conta (fica só contornada no teclado).
+   Se voltar a aparecer, conta de novo. */
 let PASS=true;try{PASS=localStorage.getItem('tnv-pass')!=='0'}catch(e){}
 const fits=set=>[...Array(12).keys()].some(k=>set.every(p=>inKey(k,p)));
 function passFilter(sig){
-  const ex=[];
-  if(PASS){
-    // a nota que "quebrou" a escala ao chegar é a suspeita
-    const order=[...sig].sort((a,b)=>firstAt[a]-firstAt[b]);let pre=[];
-    for(const p of order){
-      if(fits(pre)&&!fits([...pre,p])&&att[p]<=2&&atkN-lastAt[p]>=2){ex.push(p);continue}
-      pre.push(p);
+  let ex=[];
+  if(PASS&&!fits(sig)){
+    // compara com a escala que a maioria das notas já aponta: as notas de fora
+    // que apareceram no máximo 2 vezes e já ficaram 2 notas para trás são apagadas
+    const old=p=>att[p]<=2&&atkN-lastAt[p]>=2;
+    let best=null;
+    for(let k=0;k<12;k++){
+      // escala da maioria: a que deixa menos ataques de fora
+      const out=sig.filter(p=>!inKey(k,p)),w=out.reduce((t,p)=>t+att[p],0),sc=score(k);
+      if(!best||w<best.w||(w===best.w&&sc>best.sc))best={out,w,sc};
     }
-    sig=sig.filter(p=>!ex.includes(p));
+    // só apaga se todas as notas de fora já forem antigas; se alguma é recente, ainda conta
+    if(best&&best.out.length<=2&&best.out.every(old)){ex=best.out;sig=sig.filter(p=>!ex.includes(p))}
   }
   excluded=new Set(ex);return sig;
 }
