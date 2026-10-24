@@ -62,6 +62,7 @@ h1 span{color:var(--accent)}
 .screen.locked .fields.one .field{background:var(--accent);border-color:var(--accent);transition:background .25s}
 .screen.locked .fields.one .field .k,.screen.locked .fields.one .field .n strong{color:var(--accent-ink)}
 .screen.locked .fields.one .field .n{color:rgba(255,246,238,.75)}
+.screen.locked .fields.one .field .fv{color:var(--accent-ink)}
 .screen.locked .status b{color:var(--accent)}
 .scale{display:flex;gap:6px;flex-wrap:wrap;font-family:var(--f-mono);font-size:13px}
 .scale span{padding:3px 7px;border-radius:5px;background:#2A2825;color:var(--display-ink)}
@@ -142,7 +143,7 @@ document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
-let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, silT=0, endMarked=false, counted=false;
+let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, trans=new Array(144).fill(0), silT=0, endMarked=false, counted=false;
 /* nota só entra quando fica firme: ±40 cents do centro por 120 ms seguidos.
    Glissando, apojatura e escorregão da voz passam sem contar;
    conta ataques e marca fim de frase depois de 0,35 s de silêncio */
@@ -155,7 +156,7 @@ function feed(m,dt){
   if(m!==runM){runM=m;runT=0;counted=false}
   runT=dev<40?runT+dt:0;
   hist[pc]+=dt;
-  if(runT>=0.12){seen.add(pc);if(!counted){att[pc]++;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
+  if(runT>=0.12){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
 /* ---------- decisão do tom ---------- */
@@ -175,7 +176,21 @@ function score(k){
     if(ends[p]){e+=ends[p]*(EW[d]??0);et+=ends[p]}}
   if(lastStable>=0){e+=EW[(lastStable-k+12)%12]??0;et+=1}
   const fw=firstNote>=0?(FW[(firstNote-k+12)%12]??0):0;
-  return corr(k)+.5*(at?a/at:0)+.8*(et?e/et:0)+.4*fw;
+  const rs=resol(k);
+  return corr(k)+.5*(at?a/at:0)+.8*(et?e/et:0)+.4*fw+.6*(rs.t?rs.r/rs.t:0);
+}
+/* movimentos de resolução: sensível→tônica, 4ª→3ª, 2ª→tônica, 5ª→tônica */
+const RW={'11,0':1,'5,4':.8,'2,0':.5,'7,0':.5};
+function resol(k){let r=0,t=0,n=0;
+  for(let a=0;a<12;a++)for(let b=0;b<12;b++){const v=trans[a*12+b];if(!v)continue;t+=v;
+    const w=RW[((a-k+12)%12)+','+((b-k+12)%12)]??0;r+=v*w;if(w>0)n+=v}
+  return {r,t,n};
+}
+/* evidência de contexto a favor de k: fins de frase em repouso + resoluções + última nota estável */
+function evidence(k){let e=resol(k).n;
+  for(let p=0;p<12;p++)if(ends[p]&&(EW[(p-k+12)%12]??0)>0)e+=ends[p];
+  if(lastStable>=0&&(EW[(lastStable-k+12)%12]??0)>0)e++;
+  return e;
 }
 function significant(){return [...seen].sort((a,b)=>a-b)}
 function decide(){
@@ -186,7 +201,12 @@ function decide(){
   const approx=best<sig.length;
   let c=[...Array(12).keys()].filter(k=>cover(k)===best);
   c.sort((a,b)=>score(b)-score(a));
-  return {sig,keys:c.slice(0,2),extra:Math.max(0,c.length-2),approx,best};
+  let keys=c.slice(0,2),byContext=false,conf='';
+  if(!approx&&c.length===2&&sig.length>=4){
+    const gap=score(c[0])-score(c[1]);
+    if(gap>=.6&&evidence(c[0])>=2){byContext=true;keys=[c[0]];
+      conf=MAJ.map(iv=>(c[0]+iv)%12).filter(p=>!inKey(c[1],p)).map(p=>PC[p]).join(' ')}}
+  return {sig,keys,extra:byContext?0:Math.max(0,c.length-2),approx,best,byContext,conf};
 }
 function outside(k){return [...seen].filter(p=>!inKey(k,p)).map(p=>PC[p]).join(' ')}
 function spell(k){
@@ -217,9 +237,9 @@ function render(live){
   if(r.keys.length===1){
     const k=r.keys[0];
     f.className='fields one';
-    f.innerHTML=`<div class="field"><div class="k">${KEYS[k]}</div><div class="n"><strong>${PT[k]} maior</strong>${r.approx?' · '+outside(k)+' fora da escala':''}</div></div>
+    f.innerHTML=`<div class="field"><div class="k">${KEYS[k]}</div><div class="n"><strong>${PT[k]} maior</strong>${r.approx?' · '+outside(k)+' fora da escala':''}${r.byContext?' · pelo contexto<br><span class="fv">'+r.conf+' confirmaria</span>':''}</div></div>
       <div class="scale">${spell(k).map((s,i)=>`<span class="${seen.has((k+MAJ[i])%12)?'hit':''}${i?'':' t'}">${s}</span>`).join('')}</div>`;
-    $('stat').textContent=r.approx?'Mais provável':'Tom definido';
+    $('stat').textContent=r.approx?'Mais provável':r.byContext?'Definido pelo contexto':'Tom definido';
   }else{
     f.className='fields';
     f.innerHTML=r.keys.map((k,j)=>`<div class="field${j?'':' fav'}"><div class="k">${KEYS[k]}</div><div class="n"><strong>${PT[k]} maior</strong>${j?'':'<br><span class="fv">mais provável</span>'}${r.approx?'<br>'+outside(k)+' fora':''}</div></div>`).join('')
@@ -236,7 +256,7 @@ PC.forEach((p,i)=>{const b=document.createElement('button');b.type='button';b.te
   b.addEventListener('pointerdown',()=>{held=false;hold=setTimeout(()=>{held=true;seen.delete(i);hist[i]=0;att[i]=0;ends[i]=0;if(lastStable===i)lastStable=-1;if(firstNote===i)firstNote=-1;render(false)},500)});
   ['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>clearTimeout(hold)));
   b.onclick=()=>{if(held)return;audio();$('screen').classList.remove('locked');
-    seen.add(i);hist[i]+=0.3;att[i]++;lastStable=i;if(firstNote<0)firstNote=i;endMarked=false;beep(60+i);current=-1;render(false)};
+    seen.add(i);hist[i]+=0.3;if(lastStable>=0&&lastStable!==i)trans[lastStable*12+i]++;att[i]++;lastStable=i;if(firstNote<0)firstNote=i;endMarked=false;beep(60+i);current=-1;render(false)};
   $('chroma').appendChild(b)});
 function beep(m){const o=ctx.createOscillator(),g=ctx.createGain(),t=ctx.currentTime;o.type='triangle';o.frequency.value=440*2**((m-69)/12);
   g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.5);o.connect(g).connect(ctx.destination);o.start(t);o.stop(t+.5)}
@@ -265,7 +285,7 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state==='suspended')ctx.resume();return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
   const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
@@ -273,7 +293,7 @@ function found(t){ // tom isolado e estável por 0,5 s
   return k>=0&&t-lockT>=0.5;
 }
 function done(){stopAll();render(false);const k=decide().keys[0];
-  $('screen').classList.add('locked');$('stat').textContent='Tom definido · parei de ouvir';
+  $('screen').classList.add('locked');$('stat').textContent=(decide().byContext?'Pelo contexto':'Tom definido')+' · parei de ouvir';
   $('msg').textContent=`Achei: ${PT[k]} maior. Toque no microfone para ouvir outra melodia.`}
 function runTimeline(midiAt,dur,label,onEnd){
   const t0=ctx.currentTime;let last=0;lockKey=-1;$('led').classList.add('on');
