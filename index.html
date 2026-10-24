@@ -73,6 +73,7 @@ h1 span{color:var(--accent)}
 .tuner{display:grid;grid-template-columns:64px 1fr;gap:12px;align-items:center;border-top:1px solid #33312D;padding-top:12px}
 .now-note{font-family:var(--f-mono);font-size:28px;font-weight:500;text-align:center;line-height:1}
 .now-note.ok{color:var(--accent)}
+.ref{font-family:var(--f-mono);font-size:10px;color:var(--display-dim);text-align:center;margin-top:6px;letter-spacing:.04em}
 .dial{position:relative;height:38px}
 .ticks{position:absolute;inset:0 0 14px;display:flex;justify-content:space-between;align-items:flex-end}
 .ticks i{width:1px;height:8px;background:var(--display-dim)}
@@ -117,7 +118,7 @@ input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
     <div class="status"><span><span class="led" id="led"></span><b id="stat">Pronto</b></span><span id="count">—</span></div>
     <div class="fields" id="fields"></div>
     <div class="tuner">
-      <div class="now-note" id="nowNote">–</div>
+      <div><div class="now-note" id="nowNote">–</div><div class="ref" id="refLbl">A 440</div></div>
       <div class="dial"><div class="ticks"><i></i><i></i><i></i><i></i><i class="mid"></i><i></i><i></i><i></i><i></i></div>
         <div class="needle" id="needle"></div>
         <div class="dial-lbl"><span>♭ −50</span><span class="cents" id="cents">&nbsp;</span><span>+50 ♯</span></div></div>
@@ -148,6 +149,10 @@ let lastTouch=0;document.addEventListener('touchend',e=>{const n=Date.now();if(n
 document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
 
 let curF=0,cSm=null;
+/* referência automática: desvio médio da afinação (em semitons) e trava de nota (histerese) */
+let REF=0,refS=0,refC=0,refW=0,lockN=null;
+function refLearn(raw,w,dt){const d=raw-Math.round(raw);refS+=Math.sin(2*Math.PI*d)*w*dt;refC+=Math.cos(2*Math.PI*d)*w*dt;refW+=w*dt;
+  if(refW>.5)REF=Math.max(-.45,Math.min(.45,Math.atan2(refS,refC)/(2*Math.PI)))}
 let POLY=false;try{POLY=localStorage.getItem('tnv-poly')==='1'}catch(e){}
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
 let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, trans=new Array(144).fill(0), lastAt=new Array(12).fill(-9), firstAt=new Array(12).fill(-1), atkN=0, excluded=new Set(), silT=0, endMarked=false, counted=false;
@@ -155,15 +160,15 @@ let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstN
    (um quadro fora da faixa não zera a contagem, só desconta um pouco).
    Glissando, apojatura e escorregão da voz passam sem contar;
    conta ataques e marca fim de frase depois de 0,35 s de silêncio */
-function feed(m,dt){
+function feed(m,dt,conf=1,mf=null){
   if(m==null){runM=null;runT=0;current=-1;silT+=dt;
     if(silT>=0.35&&lastStable>=0&&!endMarked){ends[lastStable]++;endMarked=true}return}
   silT=0;
   const pc=((m%12)+12)%12;current=pc;
-  const dev=curF>0?Math.abs(1200*Math.log2(curF/440)-100*(m-69)):99;
+  const dev=mf!=null?Math.abs(mf-m)*100:(curF>0?Math.abs(1200*Math.log2(curF/440)-100*(m-69)):99);
   if(m!==runM){runM=m;runT=0;counted=false}
-  runT=dev<45?runT+dt:Math.max(0,runT-dt*.5);
-  hist[pc]+=dt;
+  runT=dev<50?runT+dt*conf:Math.max(0,runT-dt*.5);
+  hist[pc]+=dt*conf;
   if(runT>=0.08){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
@@ -252,9 +257,9 @@ function render(live){
   const r=decide(), f=$('fields');
   const inSet=new Set();r.keys.forEach(k=>MAJ.forEach(iv=>inSet.add((k+iv)%12)));
   for(let i=0;i<12;i++){const b=$('k'+i);if(b){b.classList.toggle('on',seen.has(i)&&!excluded.has(i));b.classList.toggle('pass',excluded.has(i))}}
-  const nn=$('nowNote'),nd=$('needle');
+  const nn=$('nowNote'),nd=$('needle');$('refLbl').textContent='A '+Math.round(440*2**(REF/12));
   if(current>=0&&curF>0){
-    const c=1200*Math.log2(curF/440)-100*(runM-69);cSm=cSm==null?c:cSm*.6+c*.4;
+    const c=1200*Math.log2(curF/440)-100*REF-100*(runM-69);cSm=cSm==null?c:cSm*.6+c*.4;
     const ok=Math.abs(cSm)<8;
     nn.textContent=PC[current];nn.classList.toggle('ok',ok);
     nd.style.left=(50+Math.max(-50,Math.min(50,cSm)))+'%';nd.className='needle on'+(ok?' ok':'');
@@ -310,7 +315,7 @@ function polyFeed(spec,sr,dt,loud){
     for(let i=lo;i<=hi;i++){const v=spec[i];
       if(v<top-30||v<=spec[i-1]||v<spec[i+1])continue;       // só picos fortes
       const a=spec[i-1],c=spec[i+1],d=a-2*v+c,off=d?(a-c)/(2*d):0;
-      const mf=69+12*Math.log2((i+off)*hz/440),mr=Math.round(mf);
+      const mf=69+12*Math.log2((i+off)*hz/440)-REF,mr=Math.round(mf);
       if(Math.abs(mf-mr)>.3)continue;                        // fora do centro: não é nota
       ch[((mr%12)+12)%12]+=10**(v/20);
     }
@@ -323,6 +328,29 @@ function polyFeed(spec,sr,dt,loud){
     if(on&&polyRun[p]>=.15&&!polyOn[p]){polyOn[p]=true;seen.add(p);att[p]++;lastAt[p]=++atkN;if(firstAt[p]<0)firstAt[p]=atkN;if(firstNote<0)firstNote=p}
     if(polyRun[p]===0)polyOn[p]=false;
   }
+}
+
+/* ---------- detecção de altura (MPM, McLeod) ----------
+   função de diferença normalizada; escolhe o primeiro pico com 90% do maior.
+   "clarity" (0–1) diz o quanto a leitura é confiável */
+function mpm(x0,sr){
+  let rms=0;for(let i=0;i<x0.length;i++)rms+=x0[i]*x0[i];rms=Math.sqrt(rms/x0.length);
+  const N=x0.length>>1,x=new Float32Array(N),s=sr/2;
+  for(let i=0;i<N;i++)x[i]=(x0[2*i]+x0[2*i+1])*.5;
+  const maxT=Math.min(N-2,Math.ceil(s/55)),minT=Math.max(2,Math.floor(s/1500));
+  const n=new Float32Array(maxT+2);
+  for(let t=0;t<=maxT+1;t++){let r=0,m=0;for(let i=0;i<N-t;i++){const a=x[i],b=x[i+t];r+=a*b;m+=a*a+b*b}n[t]=m?2*r/m:0}
+  let pos=false,cm=-1,ct=0;const keys=[];
+  for(let t=1;t<=maxT;t++){
+    if(!pos&&n[t-1]<=0&&n[t]>0){pos=true;cm=-1}
+    else if(pos&&n[t-1]>0&&n[t]<=0){pos=false;if(ct>=minT)keys.push(ct)}
+    if(pos&&n[t]>cm){cm=n[t];ct=t}
+  }
+  if(pos&&cm>0&&ct>=minT)keys.push(ct);
+  if(!keys.length)return {f:-1,clarity:0,rms};
+  const top=Math.max(...keys.map(t=>n[t])),p=keys.find(t=>n[t]>=.9*top);
+  const a=n[p-1],b=n[p],c=n[p+1],d=a-2*b+c,off=d?(a-c)/(2*d):0;
+  return {f:s/(p+off),clarity:b,rms};
 }
 
 /* ---------- detecção de altura (YIN) ---------- */
@@ -348,7 +376,7 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state!=='running')ctx.resume().catch(()=>{});return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){$('screen').classList.remove('locked');hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
   const r=decide();const k=r.keys.length===1&&!r.approx?r.keys[0]:-1;
@@ -391,22 +419,34 @@ $('micBtn').onclick=async()=>{
   catch(err){$('msg').textContent='Sem acesso ao microfone. Libere em Ajustes › Safari › Microfone e tente de novo.';return}
   try{if(ctx.state!=='running')await ctx.resume()}catch(e){}
   stream.getAudioTracks().forEach(t=>t.enabled=true);
-  if(!micSrc){micSrc=ctx.createMediaStreamSource(stream);an=ctx.createAnalyser();an.fftSize=2048;micSrc.connect(an);
-    an2=ctx.createAnalyser();an2.fftSize=8192;an2.smoothingTimeConstant=.5;micSrc.connect(an2)}
+  if(!micSrc){micSrc=ctx.createMediaStreamSource(stream);
+    // filtro como nos afinadores: corta ronco abaixo de 70 Hz e chiado acima de 4 kHz
+    const hp=ctx.createBiquadFilter();hp.type='highpass';hp.frequency.value=70;
+    const lp=ctx.createBiquadFilter();lp.type='lowpass';lp.frequency.value=4000;
+    micSrc.connect(hp).connect(lp);
+    an=ctx.createAnalyser();an.fftSize=2048;lp.connect(an);
+    an2=ctx.createAnalyser();an2.fftSize=8192;an2.smoothingTimeConstant=.5;lp.connect(an2)}
   reset();recording=true;lockKey=-1;$('micBtn').classList.add('on');$('led').classList.add('on');
   const buf=new Float32Array(an.fftSize),spec=new Float32Array(an2.frequencyBinCount),hist5=[];let nf=.003;polyReset();const t0=ctx.currentTime;let last=t0;
   stopFn=()=>{stream.getAudioTracks().forEach(t=>t.enabled=false)};
   $('msg').textContent='Ouvindo… pode cantar.';
   const tick=()=>{if(!recording)return;
-    an.getFloatTimeDomainData(buf);const r=yin(buf,ctx.sampleRate);
+    an.getFloatTimeDomainData(buf);const r=mpm(buf,ctx.sampleRate);
     const now=ctx.currentTime,dt=Math.min(now-last,.1);last=now;
-    if(r.f<0)nf=nf*.95+r.rms*.05;            // ruído de fundo: média do que não tem altura definida
+    if(r.f<0||r.clarity<.8)nf=nf*.95+r.rms*.05;   // ruído de fundo: média do que não tem altura definida
     const gate=Math.max(.0015,nf*2.5);
-    const m=r.f>60&&r.f<1400&&r.rms>gate?toMidi(r.f):null;
-    curF=m==null?0:r.f;
+    const ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=.8;
+    let m=null,mf=null,conf=0;
+    if(ok){const raw=69+12*Math.log2(r.f/440);
+      conf=Math.min(1,Math.max(.3,(r.clarity-.8)/.15));   // leitura limpa vale mais
+      refLearn(raw,conf,dt);mf=raw-REF;
+      // histerese: fica na nota atual até se afastar 70 cents
+      m=(lockN!=null&&Math.abs(mf-lockN)<.7)?lockN:Math.round(mf);lockN=m;}
+    else lockN=null;
+    curF=ok?r.f:0;
     if(POLY){an2.getFloatFrequencyData(spec);polyFeed(spec,ctx.sampleRate,dt,r.rms>gate);
       if(m==null){runM=null;current=-1}else{runM=m;current=((m%12)+12)%12}}
-    else feed(m,dt);
+    else feed(m,dt,conf,mf);
     render(true);
     if(found(now-t0)){done();return}
     loopId=requestAnimationFrame(tick)};
