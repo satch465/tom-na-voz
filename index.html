@@ -205,7 +205,7 @@ function decide(){
   if(!approx&&c.length===2&&sig.length>=4){
     const gap=score(c[0])-score(c[1]);
     if(gap>=.6&&evidence(c[0])>=2){byContext=true;keys=[c[0]];
-      conf=MAJ.map(iv=>(c[0]+iv)%12).filter(p=>!inKey(c[1],p)).map(p=>PC[p]).join(' ')}}
+      const sp=spell(c[0]);conf=MAJ.map((iv,i)=>[(c[0]+iv)%12,sp[i]]).filter(x=>!inKey(c[1],x[0])).map(x=>x[1]).join(' ')}}
   return {sig,keys,extra:byContext?0:Math.max(0,c.length-2),approx,best,byContext,conf};
 }
 function outside(k){return [...seen].filter(p=>!inKey(k,p)).map(p=>PC[p]).join(' ')}
