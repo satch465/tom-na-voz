@@ -189,7 +189,7 @@ let runDur=0,runLo=9,runHi=-9,runLs=-1,prevRun=null,runSum=0,runSt=0;
 const weak=new Array(12).fill(0);
 const firm=p=>{const f=att[p]-weak[p];return f>=2||(att[p]>0&&f/att[p]>=.4)};   // nota com aparições firmes de verdade   // aparições que pareceram escorregão até a nota seguinte
 function closeRun(){if(runM!=null){prevRun={m:runM,pc:((runM%12)+12)%12,dur:runDur,spread:runHi-runLo,counted,ls:runLs,sil:false};
-    if(counted&&!POLY&&runSt>=.15){const d=runSum/runSt+REF;refLearn(runM+d,1,runSt)}}
+    if(counted&&!POLY&&runSt>=.12){const d=runSum/runSt+REF;refLearn(runM+d,1,runSt)}}
   runDur=0;runLo=9;runHi=-9;runSum=0;runSt=0}
 function feed(m,dt,conf=1,mf=null){
   if(m==null){if(runM!=null)closeRun();runM=null;runT=0;current=-1;silT+=dt;if(prevRun&&silT>.06)prevRun.sil=true;
@@ -200,7 +200,8 @@ function feed(m,dt,conf=1,mf=null){
   if(m!==runM){closeRun();runM=m;runT=0;counted=false;runLs=lastStable}
   runDur+=dt;if(sd<runLo)runLo=sd;if(sd>runHi)runHi=sd;
   runT=dev<50?runT+dt:Math.max(0,runT-dt*.5);
-  if(dev<50&&mf!=null){runSum+=sd*dt;runSt+=dt}
+  // referência: ignora o começo da nota (escorregão de entrada puxaria a média para baixo)
+  if(dev<50&&mf!=null&&runDur>.12){runSum+=sd*dt;runSt+=dt}
   hist[pc]+=dt*conf;
   if(runT>=SENS[SEN].t){seen.add(pc);if(!counted){
     const p=prevRun;
@@ -286,8 +287,11 @@ function decide(){
   const cover=k=>sig.filter(p=>inKey(k,p)).length;
   const best=Math.max(...[...Array(12).keys()].map(cover));
   const approx=best<sig.length;
-  let c=[...Array(12).keys()].filter(k=>cover(k)===best);
-  c.sort((a,b)=>score(b)-score(a));
+  // nota de fora pesa contra o tom na proporção das aparições firmes
+  const fw=p=>Math.max(.3,att[p]-.7*weak[p]),tot=sig.reduce((t,p)=>t+fw(p),0)||1;
+  const J=k=>score(k)-2*sig.filter(p=>!inKey(k,p)).reduce((t,p)=>t+fw(p),0)/tot;
+  let c=[...Array(12).keys()].sort((a,b)=>J(b)-J(a));
+  if(!approx)c=c.filter(k=>cover(k)===best);
   let keys=c.slice(0,2),byContext=false,conf='';
   if(!approx&&c.length===2&&sig.length>=4){
     const gap=score(c[0])-score(c[1]);
@@ -427,13 +431,13 @@ let wipeArm=0;$('wipeBtn').onclick=()=>{
   wipeArm=Date.now();$('wipeBtn').textContent='toque de novo';setTimeout(()=>{$('wipeBtn').textContent='apagar'},3000)};
 studyLbl();
 
-/* um quadro do microfone: confiança, histerese de 70 cents, referência e contagem da nota */
+/* um quadro do microfone: confiança, histerese de 60 cents, referência e contagem da nota */
 function micFeed(r,dt,gate,poly=false){
   const S=SENS[SEN],ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=S.cl;
   let m=null,mf=null,conf=0,raw=0;
   if(ok){raw=69+12*Math.log2(r.f/440);
     conf=Math.min(1,Math.max(.4,(r.clarity-S.cl)/(.97-S.cl)));   // leitura limpa vale mais
-    mf=raw-REF;m=(lockN!=null&&Math.abs(mf-lockN)<.7)?lockN:Math.round(mf);lockN=m}
+    mf=raw-REF;m=(lockN!=null&&Math.abs(mf-lockN)<.6)?lockN:Math.round(mf);lockN=m}
   else lockN=null;
   curF=ok?r.f:0;
   if(poly){if(m==null){runM=null;current=-1}else{runM=m;current=((m%12)+12)%12}}
