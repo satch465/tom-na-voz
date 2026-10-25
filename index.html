@@ -170,8 +170,11 @@ const SENS={baixa:{cl:.82,g:3,t:.08},media:{cl:.74,g:2.5,t:.055},alta:{cl:.66,g:
 let SEN='media';try{SEN=localStorage.getItem('tnv-sens')||'media';if(!SENS[SEN])SEN='media'}catch(e){}
 /* referência automática: desvio médio da afinação (em semitons) e trava de nota (histerese) */
 let REF=0,refS=0,refC=0,refW=0,lockN=null;
+/* aprende com o desvio MÉDIO de cada nota firme (o vibrato se cancela na média);
+   só aplica se as notas concordarem entre si e nunca passa de ±30 cents:
+   perto de meio semitom a referência viraria a nota para o vizinho */
 function refLearn(raw,w,dt){const d=raw-Math.round(raw);refS+=Math.sin(2*Math.PI*d)*w*dt;refC+=Math.cos(2*Math.PI*d)*w*dt;refW+=w*dt;
-  if(refW>.5)REF=Math.max(-.45,Math.min(.45,Math.atan2(refS,refC)/(2*Math.PI)))}
+  if(refW>.6){const R=Math.hypot(refS,refC)/refW;REF=R>.75?Math.max(-.3,Math.min(.3,Math.atan2(refS,refC)/(2*Math.PI))):0}}
 let POLY=false;try{POLY=localStorage.getItem('tnv-poly')==='1'}catch(e){}
 let hist=new Array(12).fill(0), current=-1, seen=new Set(), runM=null, runT=0;
 let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstNote=-1, trans=new Array(144).fill(0), lastAt=new Array(12).fill(-9), firstAt=new Array(12).fill(-1), atkN=0, excluded=new Set(), silT=0, endMarked=false, counted=false;
@@ -179,16 +182,35 @@ let att=new Array(12).fill(0), ends=new Array(12).fill(0), lastStable=-1, firstN
    (um quadro fora da faixa não zera a contagem, só desconta um pouco).
    Glissando, apojatura e escorregão da voz passam sem contar;
    conta ataques e marca fim de frase depois de 0,35 s de silêncio */
+/* possível escorregão: nota curta (menos de 170 ms), sem pausa depois e a um tom ou menos
+   da nota seguinte. A aparição vira "fraca": só conta se couber na escala que as notas
+   firmes apontam (nota rápida de escala fica; cromatismo do escorregão sai). */
+let runDur=0,runLo=9,runHi=-9,runLs=-1,prevRun=null,runSum=0,runSt=0;
+const weak=new Array(12).fill(0);
+const firm=p=>{const f=att[p]-weak[p];return f>=2||(att[p]>0&&f/att[p]>=.4)};   // nota com aparições firmes de verdade   // aparições que pareceram escorregão até a nota seguinte
+function closeRun(){if(runM!=null){prevRun={m:runM,pc:((runM%12)+12)%12,dur:runDur,spread:runHi-runLo,counted,ls:runLs,sil:false};
+    if(counted&&!POLY&&runSt>=.15){const d=runSum/runSt+REF;refLearn(runM+d,1,runSt)}}
+  runDur=0;runLo=9;runHi=-9;runSum=0;runSt=0}
 function feed(m,dt,conf=1,mf=null){
-  if(m==null){runM=null;runT=0;current=-1;silT+=dt;
+  if(m==null){if(runM!=null)closeRun();runM=null;runT=0;current=-1;silT+=dt;if(prevRun&&silT>.06)prevRun.sil=true;
     if(silT>=0.35&&lastStable>=0&&!endMarked){ends[lastStable]++;endMarked=true}return}
   silT=0;
   const pc=((m%12)+12)%12;current=pc;
-  const dev=mf!=null?Math.abs(mf-m)*100:(curF>0?Math.abs(1200*Math.log2(curF/440)-100*(m-69)):99);
-  if(m!==runM){runM=m;runT=0;counted=false}
+  const sd=mf!=null?mf-m:(curF>0?(1200*Math.log2(curF/440)-100*(m-69))/100:.99),dev=Math.abs(sd)*100;
+  if(m!==runM){closeRun();runM=m;runT=0;counted=false;runLs=lastStable}
+  runDur+=dt;if(sd<runLo)runLo=sd;if(sd>runHi)runHi=sd;
   runT=dev<50?runT+dt:Math.max(0,runT-dt*.5);
+  if(dev<50&&mf!=null){runSum+=sd*dt;runSt+=dt}
   hist[pc]+=dt*conf;
-  if(runT>=SENS[SEN].t){seen.add(pc);if(!counted){if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
+  if(runT>=SENS[SEN].t){seen.add(pc);if(!counted){
+    const p=prevRun;
+    if(p&&p.counted&&!p.sil&&p.dur<.17&&p.m!==m&&Math.abs(m-p.m)<=2){
+      const q=p.pc;weak[q]++;hist[q]=Math.max(0,hist[q]-p.dur);
+      if(p.ls>=0&&p.ls!==q)trans[p.ls*12+q]=Math.max(0,trans[p.ls*12+q]-1);
+      if(att[q]<=weak[q]&&firstNote===q)firstNote=-1;
+      if(lastStable===q)lastStable=p.ls;p.counted=false;
+    }
+    if(lastStable>=0&&lastStable!==pc)trans[lastStable*12+pc]++;att[pc]++;lastAt[pc]=++atkN;if(firstAt[pc]<0)firstAt[pc]=atkN;counted=true;lastStable=pc;endMarked=false;if(firstNote<0)firstNote=pc}}
 }
 
 /* ---------- decisão do tom ---------- */
@@ -234,6 +256,15 @@ let PASS=true;try{PASS=localStorage.getItem('tnv-pass')!=='0'}catch(e){}
 const fits=set=>[...Array(12).keys()].some(k=>set.every(p=>inKey(k,p)));
 function passFilter(sig){
   let ex=[];
+  // notas só "fracas" (todas as aparições pareceram escorregão): ficam só se couberem
+  // na escala que as notas firmes apontam
+  const strong=sig.filter(firm),wk=sig.filter(p=>!firm(p));
+  if(wk.length&&strong.length){
+    let b=null;
+    for(let k=0;k<12;k++){const w=strong.filter(p=>!inKey(k,p)).reduce((t,p)=>t+att[p]-weak[p],0),sc=score(k);
+      if(!b||w<b.w||(w===b.w&&sc>b.sc))b={k,w,sc}}
+    const drop=wk.filter(p=>!inKey(b.k,p));ex.push(...drop);sig=sig.filter(p=>!drop.includes(p));
+  }
   if(PASS&&!fits(sig)){
     // compara com a escala que a maioria das notas já aponta: as notas de fora
     // que apareceram no máximo 2 vezes e já ficaram 2 notas para trás são apagadas
@@ -245,7 +276,7 @@ function passFilter(sig){
       if(!best||w<best.w||(w===best.w&&sc>best.sc))best={out,w,sc};
     }
     // só apaga se todas as notas de fora já forem antigas; se alguma é recente, ainda conta
-    if(best&&best.out.length<=2&&best.out.every(old)){ex=best.out;sig=sig.filter(p=>!ex.includes(p))}
+    if(best&&best.out.length<=2&&best.out.every(old)){ex.push(...best.out);sig=sig.filter(p=>!best.out.includes(p))}
   }
   excluded=new Set(ex);return sig;
 }
@@ -376,7 +407,7 @@ function studyHit(){
 }
 function snap(){const r=decide();
   return {quando:new Date().toISOString(),achou:KEYS[studyFound],contexto:studyCtx,duvida:studyAlt!=null?KEYS[studyAlt]:'-',agora:r.keys.map(k=>KEYS[k]).join('/'),
-    notas:[...seen].sort((a,b)=>a-b).map(p=>PC[p]+'×'+att[p]+(excluded.has(p)?'(pass)':'')).join(' '),
+    notas:[...seen].sort((a,b)=>a-b).map(p=>PC[p]+'×'+att[p]+(weak[p]?'('+weak[p]+'~)':'')+(excluded.has(p)?'(pass)':'')).join(' '),
     primeira:firstNote>=0?PC[firstNote]:'-',ultima:lastStable>=0?PC[lastStable]:'-',
     fins:ends.map((v,p)=>v?PC[p]+'×'+v:'').filter(Boolean).join(' ')||'-',
     A:Math.round(440*2**(REF/12)),modo:POLY?'poli':'mel',sens:SEN}}
@@ -395,6 +426,20 @@ let wipeArm=0;$('wipeBtn').onclick=()=>{
   if(Date.now()-wipeArm<3000){LOG=[];saveLog();$('wipeBtn').textContent='apagar';$('msg').textContent='Registro apagado.';wipeArm=0;return}
   wipeArm=Date.now();$('wipeBtn').textContent='toque de novo';setTimeout(()=>{$('wipeBtn').textContent='apagar'},3000)};
 studyLbl();
+
+/* um quadro do microfone: confiança, histerese de 70 cents, referência e contagem da nota */
+function micFeed(r,dt,gate,poly=false){
+  const S=SENS[SEN],ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=S.cl;
+  let m=null,mf=null,conf=0,raw=0;
+  if(ok){raw=69+12*Math.log2(r.f/440);
+    conf=Math.min(1,Math.max(.4,(r.clarity-S.cl)/(.97-S.cl)));   // leitura limpa vale mais
+    mf=raw-REF;m=(lockN!=null&&Math.abs(mf-lockN)<.7)?lockN:Math.round(mf);lockN=m}
+  else lockN=null;
+  curF=ok?r.f:0;
+  if(poly){if(m==null){runM=null;current=-1}else{runM=m;current=((m%12)+12)%12}}
+  else feed(m,dt,conf,mf);
+  return m;
+}
 
 /* ---------- detecção de altura (MPM, McLeod) ----------
    função de diferença normalizada; escolhe o primeiro pico com 90% do maior.
@@ -442,10 +487,10 @@ let ctx=null, loopId=0, stopFn=null;
 function audio(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();if(ctx.state!=='running')ctx.resume().catch(()=>{});return ctx}
 function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}current=-1;$('led').classList.remove('on');
   $('micBtn').classList.remove('on');recording=false}
-function reset(){$('screen').classList.remove('locked');studyFound=-1;studyCtx=false;$('fb').hidden=true;REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
+function reset(){$('screen').classList.remove('locked');studyFound=-1;studyCtx=false;$('fb').hidden=true;REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;prevRun=null;runDur=0;runLo=9;runHi=-9;runLs=-1;runSum=0;runSt=0;weak.fill(0);silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
-  const r=decide();const k=r.keys.length===1&&r.sig.length>=4&&ends.reduce((a,b)=>a+b,0)>=0?r.keys[0]:-1;
+  const r=decide();const k=r.keys.length===1&&r.sig.filter(firm).length>=4&&ends.reduce((a,b)=>a+b,0)>=0?r.keys[0]:-1;
   if(k!==lockKey){lockKey=k;lockT=t;return false}
   return k>=0&&t-lockT>=0.5;
 }
@@ -501,19 +546,9 @@ $('micBtn').onclick=async()=>{
     const now=ctx.currentTime,dt=Math.min(now-last,.1);last=now;
     // ruído de fundo: só aprende com o que claramente não é nota, e devagar
     if(r.f<0||r.clarity<.45)nf=Math.min(.02,nf*.97+r.rms*.03);
-    const S=SENS[SEN],gate=Math.max(.0012,nf*S.g);
-    const ok=r.f>60&&r.f<1400&&r.rms>gate&&r.clarity>=S.cl;
-    let m=null,mf=null,conf=0;
-    if(ok){const raw=69+12*Math.log2(r.f/440);
-      conf=Math.min(1,Math.max(.4,(r.clarity-S.cl)/(.97-S.cl)));   // leitura limpa vale mais
-      refLearn(raw,conf,dt);mf=raw-REF;
-      // histerese: fica na nota atual até se afastar 70 cents
-      m=(lockN!=null&&Math.abs(mf-lockN)<.7)?lockN:Math.round(mf);lockN=m;}
-    else lockN=null;
-    curF=ok?r.f:0;
-    if(POLY){an2.getFloatFrequencyData(spec);polyFeed(spec,ctx.sampleRate,dt,r.rms>gate);
-      if(m==null){runM=null;current=-1}else{runM=m;current=((m%12)+12)%12}}
-    else feed(m,dt,conf,mf);
+    const gate=Math.max(.0012,nf*SENS[SEN].g);
+    if(POLY){an2.getFloatFrequencyData(spec);polyFeed(spec,ctx.sampleRate,dt,r.rms>gate)}
+    micFeed(r,dt,gate,POLY);
     render(true);
     if(found(now-t0)){if(STUDY)studyHit();else{done();return}}
     loopId=requestAnimationFrame(tick)};
