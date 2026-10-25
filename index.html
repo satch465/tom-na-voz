@@ -200,16 +200,17 @@ function corr(k){
   return dx&&dy?n/Math.sqrt(dx*dy):0;
 }
 /* peso por grau: tônica, quinta e terça puxam; a sensível no fim pede resolução */
-const DW={0:1,7:.7,4:.6,11:.1}, EW={0:1,4:.7,7:.6,11:-.8}, FW={0:1,7:.6,4:.4};
+/* pesos ajustados no banco de testes (6.834 melodias folclóricas) */
+const DW={0:1,4:0.9,7:0.9,11:0.3}, EW={0:1,4:0.7,5:-0.6,7:0.8,11:-0.3}, FW={0:1,4:0.4,7:0.6}, WT={c:0.5,a:2,e:1,f:0,r:0.6,l:0};
 function score(k){
   let a=0,at=0,e=0,et=0;
   for(let p=0;p<12;p++){const d=(p-k+12)%12;
     if(att[p]){a+=att[p]*(DW[d]??.3);at+=att[p]}
     if(ends[p]){e+=ends[p]*(EW[d]??0);et+=ends[p]}}
-  if(lastStable>=0){e+=EW[(lastStable-k+12)%12]??0;et+=1}
+  if(lastStable>=0&&WT.l){e+=WT.l*(EW[(lastStable-k+12)%12]??0);et+=WT.l}
   const fw=firstNote>=0?(FW[(firstNote-k+12)%12]??0):0;
   const rs=resol(k);
-  return corr(k)+.5*(at?a/at:0)+.8*(et?e/et:0)+.4*fw+.6*(rs.t?rs.r/rs.t:0);
+  return WT.c*corr(k)+WT.a*(at?a/at:0)+WT.e*(et?e/et:0)+WT.f*fw+WT.r*(rs.t?rs.r/rs.t:0);
 }
 /* movimentos de resolução: sensível→tônica, 4ª→3ª, 2ª→tônica, 5ª→tônica */
 const RW={'11,0':1,'5,4':.8,'2,0':.5,'7,0':.5};
@@ -444,7 +445,7 @@ function stopAll(){cancelAnimationFrame(loopId);if(stopFn){stopFn();stopFn=null}
 function reset(){$('screen').classList.remove('locked');studyFound=-1;studyCtx=false;$('fb').hidden=true;REF=0;refS=refC=refW=0;lockN=null;hist.fill(0);att.fill(0);ends.fill(0);trans.fill(0);lastAt.fill(-9);firstAt.fill(-1);atkN=0;excluded.clear();lastStable=-1;firstNote=-1;silT=0;endMarked=false;counted=false;current=-1;seen.clear();runM=null;runT=0}
 let lockKey=-1,lockT=0;
 function found(t){ // tom isolado e estável por 0,5 s
-  const r=decide();const k=r.keys.length===1&&r.sig.length>=4?r.keys[0]:-1;
+  const r=decide();const k=r.keys.length===1&&r.sig.length>=4&&ends.reduce((a,b)=>a+b,0)>=0?r.keys[0]:-1;
   if(k!==lockKey){lockKey=k;lockT=t;return false}
   return k>=0&&t-lockT>=0.5;
 }
